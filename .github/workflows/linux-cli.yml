@@ -1,0 +1,68 @@
+name: Linux CLI Build
+
+# 手动触发，只编 Linux CLI（musl 静态链接），不发布 Release。
+# 产物：nswt-linux-x64.tar.gz / nswt-linux-arm64.tar.gz（各带 .sha256）
+#
+# 为什么用 musl：静态链接，不依赖目标机 glibc 版本，容器/青龙里直接能跑。
+# 为什么不用 --locked：Cargo.toml 新增依赖时锁文件需要刷新，这里让 cargo 自己补。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            artifact: nswt-linux-x64
+          - target: aarch64-unknown-linux-musl
+            artifact: nswt-linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # cross 自带各架构的 musl 工具链镜像，省去手工配 linker。
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (CLI only, static)
+        run: cross build --release --no-default-features --target ${{ matrix.target }}
+
+      - name: Verify
+        run: |
+          BIN="target/${{ matrix.target }}/release/nekosportsworldtool"
+          ls -lh "$BIN"
+          file "$BIN"
+          # 期望包含 "statically linked"
+          sha256sum "$BIN"
+
+      - name: Package
+        run: |
+          BIN="target/${{ matrix.target }}/release/nekosportsworldtool"
+          cp "$BIN" ./nekosportsworldtool
+          tar czf "${{ matrix.artifact }}.tar.gz" nekosportsworldtool
+          sha256sum "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.sha256"
+          cat "${{ matrix.artifact }}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.sha256
+          retention-days: 30
